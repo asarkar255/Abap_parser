@@ -25,46 +25,47 @@ def find_line_numbers(block_text, all_lines):
             end_line = idx
     return start_line, end_line
 
+# ...imports and FastAPI model stay the same...
 
 def parse_abap_code_to_ndjson(input_json: dict):
-    """Parses ABAP code and preserves sequence so it can be reconstructed."""
-    print("input_json:", input_json)
     abap_code = input_json.get("code", "")
     lines = abap_code.splitlines()
     results = []
 
     # Combined regex for FORM, CLASS DEF, CLASS IMPL
+    # NOTE: allow optional spaces before the period in starters/enders
     pattern = re.compile(
-        r"(FORM\s+\w+\..*?ENDFORM\.)|"
-        r"(CLASS\s+\w+\s+DEFINITION\..*?ENDCLASS\.)|"
-        r"(CLASS\s+\w+\s+IMPLEMENTATION\..*?ENDCLASS\.)",
+        r"(FORM\s+\w+\s*\..*?ENDFORM\s*\.)|"
+        r"(CLASS\s+\w+\s+DEFINITION\s*\..*?ENDCLASS\s*\.)|"
+        r"(CLASS\s+\w+\s+IMPLEMENTATION\s*\..*?ENDCLASS\s*\.)",
         re.IGNORECASE | re.DOTALL
     )
 
     for match in pattern.finditer(abap_code):
         block = match.group(0).strip()
 
-        if block.upper().startswith("FORM "):
-            name = re.match(r"FORM\s+(\w+)\.", block, re.IGNORECASE).group(1)
+        if re.match(r"^FORM\s+\w+\s*\.", block, re.IGNORECASE):
+            name = re.match(r"FORM\s+(\w+)\s*\.", block, re.IGNORECASE).group(1)
             btype = "perform"
             extra = {}
 
-        elif " DEFINITION." in block.upper():
-            name = re.match(r"CLASS\s+(\w+)\s+DEFINITION\.", block, re.IGNORECASE).group(1)
+        elif re.match(r"^CLASS\s+\w+\s+DEFINITION\s*\.", block, re.IGNORECASE):
+            name = re.match(r"CLASS\s+(\w+)\s+DEFINITION\s*\.", block, re.IGNORECASE).group(1)
             btype = "class_definition"
             extra = {}
 
-        elif " IMPLEMENTATION." in block.upper():
-            name = re.match(r"CLASS\s+(\w+)\s+IMPLEMENTATION\.", block, re.IGNORECASE).group(1)
+        elif re.match(r"^CLASS\s+\w+\s+IMPLEMENTATION\s*\.", block, re.IGNORECASE):
+            name = re.match(r"CLASS\s+(\w+)\s+IMPLEMENTATION\s*\.", block, re.IGNORECASE).group(1)
             btype = "class_impl"
             extra = {}
-            # Extract methods inside class
+
+            # Extract methods inside class impl (also allow spaces before dots)
             method_pattern = re.compile(
-                r"(METHOD\s+\w+\..*?ENDMETHOD\.)",
+                r"(METHOD\s+\w+\s*\..*?ENDMETHOD\s*\.)",
                 re.IGNORECASE | re.DOTALL
             )
             for m_block in method_pattern.findall(block):
-                m_name = re.match(r"METHOD\s+(\w+)\.", m_block, re.IGNORECASE).group(1)
+                m_name = re.match(r"METHOD\s+(\w+)\s*\.", m_block, re.IGNORECASE).group(1)
                 m_start, m_end = find_line_numbers(m_block, lines)
                 results.append({
                     "pgm_name": input_json.get("pgm_name", ""),
@@ -85,11 +86,9 @@ def parse_abap_code_to_ndjson(input_json: dict):
             "name": name,
             "start_line": start,
             "end_line": end,
-            "code": block,
-            **extra
+            "code": block
         })
 
-    # Fallback for free-running ABAP
     if not results:
         results.append({
             "pgm_name": input_json.get("pgm_name", ""),
@@ -100,9 +99,9 @@ def parse_abap_code_to_ndjson(input_json: dict):
             "code": abap_code.strip()
         })
 
-    # Preserve source order
     results.sort(key=lambda x: x["start_line"])
     return results
+
 
 
 @app.post("/parse_abap")

@@ -28,7 +28,7 @@ def find_line_numbers(block_text, all_lines):
 
 def parse_abap_code_to_ndjson(input_json: dict):
     """Parses ABAP code and preserves sequence so it can be reconstructed."""
-
+    print("input_json:", input_json)
     abap_code = input_json.get("code", "")
     lines = abap_code.splitlines()
     results = []

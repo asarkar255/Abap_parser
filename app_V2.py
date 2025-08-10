@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 import re
 
-app = FastAPI(title="ABAP Parser API", version="1.4")
+app = FastAPI(title="ABAP Parser API", version="1.3")
 
 class ABAPInput(BaseModel):
     pgm_name: str
@@ -15,7 +15,6 @@ CLDEF_BLOCK_RE    = re.compile(r"(?ms)^\s*CLASS\s+(\w+)\s+DEFINITION\s*\.\s*.*?^
 CLIMP_BLOCK_RE    = re.compile(r"(?ms)^\s*CLASS\s+(\w+)\s+IMPLEMENTATION\s*\.\s*.*?^\s*ENDCLASS\s*\.(?:[ \t]*\"[^\n]*)?\s*$")
 METHOD_BLOCK_RE   = re.compile(r"(?ms)^\s*METHOD\s+(\w+)\s*\.\s*.*?^\s*ENDMETHOD\s*\.(?:[ \t]*\"[^\n]*)?\s*$")
 FUNC_BLOCK_RE     = re.compile(r"(?ms)^\s*FUNCTION\s+(\w+)\s*\.\s*.*?^\s*ENDFUNCTION\s*\.(?:[ \t]*\"[^\n]*)?\s*$")
-MODULE_BLOCK_RE   = re.compile(r"(?ms)^\s*MODULE\s+(\w+)\s*\.\s*.*?^\s*ENDMODULE\s*\.(?:[ \t]*\"[^\n]*)?\s*$")
 
 # Combined regex for all top-level blocks
 TOPLEVEL_RE = re.compile(
@@ -24,7 +23,6 @@ TOPLEVEL_RE = re.compile(
     r"|(^\s*CLASS\s+\w+\s+DEFINITION\s*\.\s*.*?^\s*ENDCLASS\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
     r"|(^\s*CLASS\s+\w+\s+IMPLEMENTATION\s*\.\s*.*?^\s*ENDCLASS\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
     r"|(^\s*FUNCTION\s+\w+\s*\.\s*.*?^\s*ENDFUNCTION\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
-    r"|(^\s*MODULE\s+\w+\s*\.\s*.*?^\s*ENDMODULE\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
 )
 
 def _offsets_to_lines(src: str, start: int, end: int):
@@ -66,10 +64,6 @@ def _emit_block(input_json, block_text, start_off, end_off, results):
     elif FUNC_BLOCK_RE.match(block_text):
         name = FUNC_BLOCK_RE.match(block_text).group(1)
         btype = "function"
-        extra = {}
-    elif MODULE_BLOCK_RE.match(block_text):
-        name = MODULE_BLOCK_RE.match(block_text).group(1)
-        btype = "module"
         extra = {}
     else:
         return  # skip unrecognized

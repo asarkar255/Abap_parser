@@ -1,10 +1,8 @@
-# abap_parser_app.py
 from fastapi import FastAPI
 from pydantic import BaseModel
 import re
-from typing import List, Dict, Any
 
-app = FastAPI(title="ABAP Parser API", version="1.6")
+app = FastAPI(title="ABAP Parser API", version="1.5")
 
 class ABAPInput(BaseModel):
     pgm_name: str
@@ -12,45 +10,39 @@ class ABAPInput(BaseModel):
     code: str
 
 # ---------- Robust, line-aware block patterns ----------
-# - (?m)s: MULTILINE + DOTALL
-# - Tolerant to modifiers on CLASS ... DEFINITION header
-# - MODULE captures optional INPUT/OUTPUT mode
-FORM_BLOCK_RE   = re.compile(r"(?ms)^\s*FORM\s+(\w+)\s*\.\s*.*?^\s*ENDFORM\s*\.(?:[ \t]*\"[^\n]*)?\s*$")
-CLDEF_BLOCK_RE  = re.compile(r"(?ms)^\s*CLASS\s+(\w+)\s+DEFINITION\b[^\n]*\.\s*.*?^\s*ENDCLASS\s*\.(?:[ \t]*\"[^\n]*)?\s*$")
-CLIMP_BLOCK_RE  = re.compile(r"(?ms)^\s*CLASS\s+(\w+)\s+IMPLEMENTATION\s*\.\s*.*?^\s*ENDCLASS\s*\.(?:[ \t]*\"[^\n]*)?\s*$")
-METHOD_BLOCK_RE = re.compile(r"(?ms)^\s*METHOD\s+(\w+)\s*\.\s*.*?^\s*ENDMETHOD\s*\.(?:[ \t]*\"[^\n]*)?\s*$")
-FUNC_BLOCK_RE   = re.compile(r"(?ms)^\s*FUNCTION\s+(\w+)\s*\.\s*.*?^\s*ENDFUNCTION\s*\.(?:[ \t]*\"[^\n]*)?\s*$")
-MODULE_BLOCK_RE = re.compile(r"(?ms)^\s*MODULE\s+(\w+)(?:\s+(INPUT|OUTPUT))?\s*\.\s*.*?^\s*ENDMODULE\s*\.(?:[ \t]*\"[^\n]*)?\s*$", re.IGNORECASE)
+FORM_BLOCK_RE     = re.compile(r"(?ms)^\s*FORM\s+(\w+)\s*\.\s*.*?^\s*ENDFORM\s*\.(?:[ \t]*\"[^\n]*)?\s*$")
+CLDEF_BLOCK_RE    = re.compile(r"(?ms)^\s*CLASS\s+(\w+)\s+DEFINITION\s*\.\s*.*?^\s*ENDCLASS\s*\.(?:[ \t]*\"[^\n]*)?\s*$")
+CLIMP_BLOCK_RE    = re.compile(r"(?ms)^\s*CLASS\s+(\w+)\s+IMPLEMENTATION\s*\.\s*.*?^\s*ENDCLASS\s*\.(?:[ \t]*\"[^\n]*)?\s*$")
+METHOD_BLOCK_RE   = re.compile(r"(?ms)^\s*METHOD\s+(\w+)\s*\.\s*.*?^\s*ENDMETHOD\s*\.(?:[ \t]*\"[^\n]*)?\s*$")
+FUNC_BLOCK_RE     = re.compile(r"(?ms)^\s*FUNCTION\s+(\w+)\s*\.\s*.*?^\s*ENDFUNCTION\s*\.(?:[ \t]*\"[^\n]*)?\s*$")
+MODULE_BLOCK_RE   = re.compile(r"(?ms)^\s*MODULE\s+(\w+)\s*\.\s*.*?^\s*ENDMODULE\s*\.(?:[ \t]*\"[^\n]*)?\s*$")
 
-# Combined regex for all top-level blocks (METHODs are emitted only via class_impl extraction)
+# Combined regex for all top-level blocks
 TOPLEVEL_RE = re.compile(
     r"(?ms)"
     r"(^\s*FORM\s+\w+\s*\.\s*.*?^\s*ENDFORM\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
-    r"|(^\s*CLASS\s+\w+\s+DEFINITION\b[^\n]*\.\s*.*?^\s*ENDCLASS\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
+    r"|(^\s*CLASS\s+\w+\s+DEFINITION\s*\.\s*.*?^\s*ENDCLASS\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
     r"|(^\s*CLASS\s+\w+\s+IMPLEMENTATION\s*\.\s*.*?^\s*ENDCLASS\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
     r"|(^\s*FUNCTION\s+\w+\s*\.\s*.*?^\s*ENDFUNCTION\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
-    r"|(^\s*MODULE\s+\w+(?:\s+(?:INPUT|OUTPUT))?\s*\.\s*.*?^\s*ENDMODULE\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
+    r"|(^\s*MODULE\s+\w+\s*\.\s*.*?^\s*ENDMODULE\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
 )
 
 def _offsets_to_lines(src: str, start: int, end: int):
-    """Convert absolute character offsets into 1-based line numbers (inclusive)."""
-    start_line = src.count("\n", 0, start) + 1 if src else 0
-    end_line   = src.count("\n", 0, end) + 1 if src else 0
+    start_line = src.count("\n", 0, start) + 1
+    end_line   = src.count("\n", 0, end) + 1
     return start_line, end_line
 
-def _emit_block(input_json: Dict[str, Any], block_text: str, start_off: int, end_off: int, results: List[Dict[str, Any]]):
+def _emit_block(input_json, block_text, start_off, end_off, results):
     """
     Emits one or more result records for a matched block.
     For class_impl: emit container-only code first, then full method items.
     For others: emit single record as-is.
     """
-    src_all = input_json["code"]
-    start_line, end_line = _offsets_to_lines(src_all, start_off, end_off)
+    start_line, end_line = _offsets_to_lines(input_json["code"], start_off, end_off)
 
     # FORM
-    m = FORM_BLOCK_RE.match(block_text)
-    if m:
-        name = m.group(1)
+    if FORM_BLOCK_RE.match(block_text):
+        name = FORM_BLOCK_RE.match(block_text).group(1)
         results.append({
             "pgm_name": input_json["pgm_name"],
             "inc_name": input_json["inc_name"],
@@ -62,10 +54,9 @@ def _emit_block(input_json: Dict[str, Any], block_text: str, start_off: int, end
         })
         return
 
-    # CLASS DEFINITION (modifiers on header allowed)
-    m = CLDEF_BLOCK_RE.match(block_text)
-    if m:
-        name = m.group(1)
+    # CLASS DEFINITION
+    if CLDEF_BLOCK_RE.match(block_text):
+        name = CLDEF_BLOCK_RE.match(block_text).group(1)
         results.append({
             "pgm_name": input_json["pgm_name"],
             "inc_name": input_json["inc_name"],
@@ -78,9 +69,8 @@ def _emit_block(input_json: Dict[str, Any], block_text: str, start_off: int, end
         return
 
     # CLASS IMPLEMENTATION (container-only + methods-after)
-    m = CLIMP_BLOCK_RE.match(block_text)
-    if m:
-        class_name = m.group(1)
+    if CLIMP_BLOCK_RE.match(block_text):
+        name = CLIMP_BLOCK_RE.match(block_text).group(1)
 
         # Find method spans inside the class block
         method_spans = [(mm.start(0), mm.end(0)) for mm in METHOD_BLOCK_RE.finditer(block_text)]
@@ -100,23 +90,23 @@ def _emit_block(input_json: Dict[str, Any], block_text: str, start_off: int, end
             "pgm_name": input_json["pgm_name"],
             "inc_name": input_json["inc_name"],
             "type": "class_impl",
-            "name": class_name,
+            "name": name,
             "start_line": start_line,
             "end_line": end_line,
             "code": container_code
         })
 
-        # Then emit each method (full body) immediately after
+        # Then emit each method (full body)
         for mm in METHOD_BLOCK_RE.finditer(block_text):
             m_name = mm.group(1)
             m_abs_start = start_off + mm.start(0)
             m_abs_end   = start_off + mm.end(0)
-            m_sl, m_el  = _offsets_to_lines(src_all, m_abs_start, m_abs_end)
+            m_sl, m_el  = _offsets_to_lines(input_json["code"], m_abs_start, m_abs_end)
             results.append({
                 "pgm_name": input_json["pgm_name"],
                 "inc_name": input_json["inc_name"],
                 "type": "method",
-                "class_implementation": class_name,
+                "class_implementation": name,
                 "name": m_name,
                 "start_line": m_sl,
                 "end_line": m_el,
@@ -125,9 +115,8 @@ def _emit_block(input_json: Dict[str, Any], block_text: str, start_off: int, end
         return
 
     # FUNCTION
-    m = FUNC_BLOCK_RE.match(block_text)
-    if m:
-        name = m.group(1)
+    if FUNC_BLOCK_RE.match(block_text):
+        name = FUNC_BLOCK_RE.match(block_text).group(1)
         results.append({
             "pgm_name": input_json["pgm_name"],
             "inc_name": input_json["inc_name"],
@@ -139,12 +128,10 @@ def _emit_block(input_json: Dict[str, Any], block_text: str, start_off: int, end
         })
         return
 
-    # MODULE (capture optional mode)
-    m = MODULE_BLOCK_RE.match(block_text)
-    if m:
-        name = m.group(1)
-        mode = (m.group(2) or "").upper()
-        rec = {
+    # MODULE
+    if MODULE_BLOCK_RE.match(block_text):
+        name = MODULE_BLOCK_RE.match(block_text).group(1)
+        results.append({
             "pgm_name": input_json["pgm_name"],
             "inc_name": input_json["inc_name"],
             "type": "module",
@@ -152,18 +139,15 @@ def _emit_block(input_json: Dict[str, Any], block_text: str, start_off: int, end
             "start_line": start_line,
             "end_line": end_line,
             "code": block_text
-        }
-        if mode:
-            rec["mode"] = mode  # optional field
-        results.append(rec)
+        })
         return
 
     # Unrecognized → nothing
     return
 
 def parse_abap_code_to_ndjson(input_json: dict):
-    src = input_json.get("code", "") or ""
-    results: List[Dict[str, Any]] = []
+    src = input_json.get("code", "")
+    results = []
 
     last_end = 0
     for m in TOPLEVEL_RE.finditer(src):

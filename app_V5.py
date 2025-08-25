@@ -4,7 +4,7 @@ from pydantic import BaseModel
 import re
 from typing import List, Dict, Any
 
-app = FastAPI(title="ABAP Parser API", version="1.9")
+app = FastAPI(title="ABAP Parser API", version="1.8")
 
 class ABAPInput(BaseModel):
     pgm_name: str
@@ -17,36 +17,17 @@ class ABAPInput(BaseModel):
 # - CLASS ... DEFINITION matches modifiers on the header
 # - MODULE captures optional INPUT/OUTPUT mode
 # - MACRO: DEFINE ... END-OF-DEFINITION.
-# - METHOD: allow constructor/class_constructor and interface methods (lif_iface~method)
-
-# Case-insensitive everywhere
-FORM_BLOCK_RE   = re.compile(
-    r"(?ims)^\s*FORM\s+(\w+)\b([^\n]*?)\.\s*.*?^\s*ENDFORM\s*\.(?:[ \t]*\"[^\n]*)?\s*$"
-)
-CLDEF_BLOCK_RE  = re.compile(
-    r"(?ims)^\s*CLASS\s+(\w+)\s+DEFINITION\b[^\n]*\.\s*.*?^\s*ENDCLASS\s*\.(?:[ \t]*\"[^\n]*)?\s*$"
-)
-CLIMP_BLOCK_RE  = re.compile(
-    r"(?ims)^\s*CLASS\s+(\w+)\s+IMPLEMENTATION\s*\.\s*.*?^\s*ENDCLASS\s*\.(?:[ \t]*\"[^\n]*)?\s*$"
-)
-# IMPORTANT: no trailing '$' so we can find multiple methods inside a class impl
-# Name supports 'constructor', 'class_constructor', and 'iface~method'
-METHOD_BLOCK_RE = re.compile(
-    r"(?ims)^\s*METHOD\s+([A-Za-z_]\w*(?:~\w+)?|constructor|class_constructor)\s*\.\s*.*?^\s*ENDMETHOD\s*\.(?:[ \t]*\"[^\n]*)?"
-)
-FUNC_BLOCK_RE   = re.compile(
-    r"(?ims)^\s*FUNCTION\s+(\w+)\s*\.\s*.*?^\s*ENDFUNCTION\s*\.(?:[ \t]*\"[^\n]*)?\s*$"
-)
-MODULE_BLOCK_RE = re.compile(
-    r"(?ims)^\s*MODULE\s+(\w+)(?:\s+(INPUT|OUTPUT))?\s*\.\s*.*?^\s*ENDMODULE\s*\.(?:[ \t]*\"[^\n]*)?\s*$"
-)
-MACRO_BLOCK_RE  = re.compile(
-    r"(?ims)^\s*DEFINE\s+(\w+)\s*\.\s*.*?^\s*END-OF-DEFINITION\s*\.(?:[ \t]*\"[^\n]*)?\s*$"
-)
+FORM_BLOCK_RE   = re.compile(r"(?ms)^\s*FORM\s+(\w+)\b([^\n]*?)\.\s*.*?^\s*ENDFORM\s*\.(?:[ \t]*\"[^\n]*)?\s*$")
+CLDEF_BLOCK_RE  = re.compile(r"(?ms)^\s*CLASS\s+(\w+)\s+DEFINITION\b[^\n]*\.\s*.*?^\s*ENDCLASS\s*\.(?:[ \t]*\"[^\n]*)?\s*$")
+CLIMP_BLOCK_RE  = re.compile(r"(?ms)^\s*CLASS\s+(\w+)\s+IMPLEMENTATION\s*\.\s*.*?^\s*ENDCLASS\s*\.(?:[ \t]*\"[^\n]*)?\s*$")
+METHOD_BLOCK_RE = re.compile(r"(?ms)^\s*METHOD\s+(\w+)\s*\.\s*.*?^\s*ENDMETHOD\s*\.(?:[ \t]*\"[^\n]*)?\s*$")
+FUNC_BLOCK_RE   = re.compile(r"(?ms)^\s*FUNCTION\s+(\w+)\s*\.\s*.*?^\s*ENDFUNCTION\s*\.(?:[ \t]*\"[^\n]*)?\s*$")
+MODULE_BLOCK_RE = re.compile(r"(?ms)^\s*MODULE\s+(\w+)(?:\s+(INPUT|OUTPUT))?\s*\.\s*.*?^\s*ENDMODULE\s*\.(?:[ \t]*\"[^\n]*)?\s*$", re.IGNORECASE)
+MACRO_BLOCK_RE  = re.compile(r"(?ms)^\s*DEFINE\s+(\w+)\s*\.\s*.*?^\s*END-OF-DEFINITION\s*\.(?:[ \t]*\"[^\n]*)?\s*$")
 
 # Combined regex for all top-level blocks (METHODs are emitted only via class_impl extraction)
 TOPLEVEL_RE = re.compile(
-    r"(?ims)"
+    r"(?ms)"
     r"(^\s*FORM\s+\w+\b[^\n]*\.\s*.*?^\s*ENDFORM\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
     r"|(^\s*CLASS\s+\w+\s+DEFINITION\b[^\n]*\.\s*.*?^\s*ENDCLASS\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
     r"|(^\s*CLASS\s+\w+\s+IMPLEMENTATION\s*\.\s*.*?^\s*ENDCLASS\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
@@ -113,7 +94,7 @@ def _emit_block(input_json: Dict[str, Any], block_text: str, start_off: int, end
             last_end    = method_spans[-1][1]
             header = block_text[:first_start].rstrip()
             footer = block_text[last_end:].lstrip()
-            container_code = header + ("\n" if header and footer else "") + footer
+            container_code = header + "\n" + footer
         else:
             # No methods inside: container is the whole block
             container_code = block_text

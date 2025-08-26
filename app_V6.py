@@ -4,7 +4,7 @@ from pydantic import BaseModel
 import re
 from typing import List, Dict, Any
 
-app = FastAPI(title="ABAP Parser API", version="1.10")
+app = FastAPI(title="ABAP Parser API", version="1.9")
 
 class ABAPInput(BaseModel):
     pgm_name: str
@@ -13,15 +13,15 @@ class ABAPInput(BaseModel):
 
 # ---------- Robust, line-aware block patterns ----------
 # Notes:
-# - FORM now allows multi-line parameter header until the first dot.
-# - CLASS ... DEFINITION matches modifiers on the header.
-# - MODULE captures optional INPUT/OUTPUT mode.
+# - FORM allows parameters before the header dot (USING/CHANGING/TABLES/RAISING...)
+# - CLASS ... DEFINITION matches modifiers on the header
+# - MODULE captures optional INPUT/OUTPUT mode
 # - MACRO: DEFINE ... END-OF-DEFINITION.
-# - METHOD: supports constructor/class_constructor and iface~method; also matched top-level.
+# - METHOD: allow constructor/class_constructor and interface methods (lif_iface~method)
 
-# Case-insensitive, multiline, dotall everywhere
+# Case-insensitive everywhere
 FORM_BLOCK_RE   = re.compile(
-    r"(?ims)^\s*FORM\s+(\w+)\b(?P<header>[\s\S]*?)\.\s*.*?^\s*ENDFORM\s*\.(?:[ \t]*\"[^\n]*)?\s*$"
+    r"(?ims)^\s*FORM\s+(\w+)\b([^\n]*?)\.\s*.*?^\s*ENDFORM\s*\.(?:[ \t]*\"[^\n]*)?\s*$"
 )
 CLDEF_BLOCK_RE  = re.compile(
     r"(?ims)^\s*CLASS\s+(\w+)\s+DEFINITION\b[^\n]*\.\s*.*?^\s*ENDCLASS\s*\.(?:[ \t]*\"[^\n]*)?\s*$"
@@ -29,6 +29,7 @@ CLDEF_BLOCK_RE  = re.compile(
 CLIMP_BLOCK_RE  = re.compile(
     r"(?ims)^\s*CLASS\s+(\w+)\s+IMPLEMENTATION\s*\.\s*.*?^\s*ENDCLASS\s*\.(?:[ \t]*\"[^\n]*)?\s*$"
 )
+# IMPORTANT: no trailing '$' so we can find multiple methods inside a class impl
 # Name supports 'constructor', 'class_constructor', and 'iface~method'
 METHOD_BLOCK_RE = re.compile(
     r"(?ims)^\s*METHOD\s+([A-Za-z_]\w*(?:~\w+)?|constructor|class_constructor)\s*\.\s*.*?^\s*ENDMETHOD\s*\.(?:[ \t]*\"[^\n]*)?"
@@ -43,18 +44,15 @@ MACRO_BLOCK_RE  = re.compile(
     r"(?ims)^\s*DEFINE\s+(\w+)\s*\.\s*.*?^\s*END-OF-DEFINITION\s*\.(?:[ \t]*\"[^\n]*)?\s*$"
 )
 
-# Combined regex for all top-level blocks.
-# IMPORTANT: the class implementation alt will swallow the whole class block, so
-# methods inside won’t be double-matched by the METHOD alt below.
+# Combined regex for all top-level blocks (METHODs are emitted only via class_impl extraction)
 TOPLEVEL_RE = re.compile(
     r"(?ims)"
-    r"(^\s*FORM\s+\w+\b[\s\S]*?\.\s*.*?^\s*ENDFORM\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
+    r"(^\s*FORM\s+\w+\b[^\n]*\.\s*.*?^\s*ENDFORM\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
     r"|(^\s*CLASS\s+\w+\s+DEFINITION\b[^\n]*\.\s*.*?^\s*ENDCLASS\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
     r"|(^\s*CLASS\s+\w+\s+IMPLEMENTATION\s*\.\s*.*?^\s*ENDCLASS\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
     r"|(^\s*FUNCTION\s+\w+\s*\.\s*.*?^\s*ENDFUNCTION\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
     r"|(^\s*MODULE\s+\w+(?:\s+(?:INPUT|OUTPUT))?\s*\.\s*.*?^\s*ENDMODULE\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
     r"|(^\s*DEFINE\s+\w+\s*\.\s*.*?^\s*END-OF-DEFINITION\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
-    r"|(^\s*METHOD\s+(?:[A-Za-z_]\w*(?:~\w+)?|constructor|class_constructor)\s*\.\s*.*?^\s*ENDMETHOD\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
 )
 
 def _offsets_to_lines(src: str, start: int, end: int):
@@ -72,7 +70,7 @@ def _emit_block(input_json: Dict[str, Any], block_text: str, start_off: int, end
     src_all = input_json["code"]
     start_line, end_line = _offsets_to_lines(src_all, start_off, end_off)
 
-    # FORM
+    # FORM (with optional parameters before the dot)
     m = FORM_BLOCK_RE.match(block_text)
     if m:
         name = m.group(1)
@@ -87,7 +85,7 @@ def _emit_block(input_json: Dict[str, Any], block_text: str, start_off: int, end
         })
         return
 
-    # CLASS DEFINITION
+    # CLASS DEFINITION (modifiers on header allowed)
     m = CLDEF_BLOCK_RE.match(block_text)
     if m:
         name = m.group(1)
@@ -102,11 +100,14 @@ def _emit_block(input_json: Dict[str, Any], block_text: str, start_off: int, end
         })
         return
 
-    # CLASS IMPLEMENTATION (container + inner methods)
+    # CLASS IMPLEMENTATION (container-only + methods-after)
     m = CLIMP_BLOCK_RE.match(block_text)
     if m:
         class_name = m.group(1)
+
+        # Find method spans inside the class block
         method_spans = [(mm.start(0), mm.end(0)) for mm in METHOD_BLOCK_RE.finditer(block_text)]
+
         if method_spans:
             first_start = method_spans[0][0]
             last_end    = method_spans[-1][1]
@@ -114,8 +115,10 @@ def _emit_block(input_json: Dict[str, Any], block_text: str, start_off: int, end
             footer = block_text[last_end:].lstrip()
             container_code = header + ("\n" if header and footer else "") + footer
         else:
+            # No methods inside: container is the whole block
             container_code = block_text
 
+        # Emit the class_impl FIRST with container-only code
         results.append({
             "pgm_name": input_json["pgm_name"],
             "inc_name": input_json["inc_name"],
@@ -126,6 +129,7 @@ def _emit_block(input_json: Dict[str, Any], block_text: str, start_off: int, end
             "code": container_code
         })
 
+        # Then emit each method (full body) immediately after
         for mm in METHOD_BLOCK_RE.finditer(block_text):
             m_name = mm.group(1)
             m_abs_start = start_off + mm.start(0)
@@ -158,7 +162,7 @@ def _emit_block(input_json: Dict[str, Any], block_text: str, start_off: int, end
         })
         return
 
-    # MODULE
+    # MODULE (capture optional mode)
     m = MODULE_BLOCK_RE.match(block_text)
     if m:
         name = m.group(1)
@@ -173,7 +177,7 @@ def _emit_block(input_json: Dict[str, Any], block_text: str, start_off: int, end
             "code": block_text
         }
         if mode:
-            rec["mode"] = mode
+            rec["mode"] = mode  # optional field
         results.append(rec)
         return
 
@@ -192,35 +196,11 @@ def _emit_block(input_json: Dict[str, Any], block_text: str, start_off: int, end
         })
         return
 
-    # Stand-alone METHOD (when not wrapped by a class implementation in this include)
-    m = METHOD_BLOCK_RE.match(block_text)
-    if m:
-        m_name = m.group(1)
-        results.append({
-            "pgm_name": input_json["pgm_name"],
-            "inc_name": input_json["inc_name"],
-            "type": "method",
-            "name": m_name,
-            "start_line": start_line,
-            "end_line": end_line,
-            "code": block_text
-        })
-        return
-
-def _normalize_code(s: str) -> str:
-    """Normalize exotic whitespace: CRLF -> LF, NBSP -> space, LS/PS -> LF."""
-    if not s:
-        return ""
-    # CRLF/CR -> LF
-    s = s.replace("\r\n", "\n").replace("\r", "\n")
-    # Unicode non-breaking space to normal space
-    s = s.replace("\u00A0", " ")
-    # Unicode line/paragraph separators to LF
-    s = s.replace("\u2028", "\n").replace("\u2029", "\n")
-    return s
+    # Unrecognized → nothing
+    return
 
 def parse_abap_code_to_ndjson(input_json: dict):
-    src = _normalize_code(input_json.get("code", "") or "")
+    src = input_json.get("code", "") or ""
     results: List[Dict[str, Any]] = []
 
     last_end = 0
@@ -242,7 +222,7 @@ def parse_abap_code_to_ndjson(input_json: dict):
             })
 
         block_text = m.group(0)
-        _emit_block(input_json | {"code": src}, block_text, s, e, results)
+        _emit_block(input_json, block_text, s, e, results)
         last_end = e
 
     # Raw code segment after last block

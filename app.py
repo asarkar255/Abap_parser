@@ -1,10 +1,10 @@
-# abap_parser_app.py  (v1.11 – FORM names can contain hyphens)
+# abap_parser_app.py  (v1.12 – FORM names accept hyphens; allow dot/space after name)
 from fastapi import FastAPI
 from pydantic import BaseModel
 import re
 from typing import List, Dict, Any
 
-app = FastAPI(title="ABAP Parser API", version="1.11")
+app = FastAPI(title="ABAP Parser API", version="1.12")
 
 class ABAPInput(BaseModel):
     pgm_name: str
@@ -25,12 +25,9 @@ FORM_NAME = r"(?P<name>[A-Za-z_][A-Za-z0-9_-]*)"
 
 # Case-insensitive, multiline, dotall everywhere
 
-# FIX: allow hyphens in the FORM name and avoid \b (use lookahead for whitespace instead)
-# FORM_BLOCK_RE   = re.compile(
-#     rf"(?ims)^\s*FORM\s+{FORM_NAME}(?=\s)(?P<header>[\s\S]*?)\.\s*.*?^\s*ENDFORM\s*\.(?:[ \t]*\"[^\n]*)?\s*$"
-# )
+# FORM: allow hyphens in name and allow *either space or dot* after the name
 FORM_BLOCK_RE = re.compile(
-    r"(?ims)^\s*FORM\s+([A-Za-z0-9_\-]+)\b(?P<header>[\s\S]*?)\.\s*.*?^\s*ENDFORM\s*\.(?:[ \t]*\"[^\n]*)?\s*$"
+    rf"(?ims)^\s*FORM\s+{FORM_NAME}(?=[\s\.])(?P<header>[\s\S]*?)\.\s*.*?^\s*ENDFORM\s*\.(?:[ \t]*\"[^\n]*)?\s*$"
 )
 
 CLDEF_BLOCK_RE  = re.compile(
@@ -56,11 +53,9 @@ MACRO_BLOCK_RE  = re.compile(
 # Combined regex for all top-level blocks.
 # IMPORTANT: the class implementation alt will swallow the whole class block, so
 # methods inside won’t be double-matched by the METHOD alt below.
-
-# FIX: the FORM alt here must ALSO allow hyphens; avoid \b.
 TOPLEVEL_RE = re.compile(
     rf"(?ims)"
-    rf"(^\s*FORM\s+[A-Za-z_][A-Za-z0-9_-]*(?=\s)[\s\S]*?\.\s*.*?^\s*ENDFORM\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
+    rf"(^\s*FORM\s+{FORM_NAME}(?=[\s\.])[\s\S]*?\.\s*.*?^\s*ENDFORM\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
     r"|(^\s*CLASS\s+\w+\s+DEFINITION\b[^\n]*\.\s*.*?^\s*ENDCLASS\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
     r"|(^\s*CLASS\s+\w+\s+IMPLEMENTATION\s*\.\s*.*?^\s*ENDCLASS\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
     r"|(^\s*FUNCTION\s+\w+\s*\.\s*.*?^\s*ENDFUNCTION\s*\.(?:[ \t]*\"[^\n]*)?\s*$)"
@@ -223,18 +218,10 @@ def _normalize_code(s: str) -> str:
     """Normalize exotic whitespace: CRLF -> LF, NBSP -> space, LS/PS -> LF."""
     if not s:
         return ""
-    # CRLF/CR -> LF
     s = s.replace("\r\n", "\n").replace("\r", "\n")
-    # Unicode non-breaking space to normal space
     s = s.replace("\u00A0", " ")
-    # Unicode line/paragraph separators to LF
     s = s.replace("\u2028", "\n").replace("\u2029", "\n")
     return s
-
-def _offsets_to_lines(src: str, start: int, end: int):
-    start_line = src.count("\n", 0, start) + 1 if src else 0
-    end_line   = src.count("\n", 0, end) + 1 if src else 0
-    return start_line, end_line
 
 def parse_abap_code_to_ndjson(input_json: dict):
     src = _normalize_code(input_json.get("code", "") or "")

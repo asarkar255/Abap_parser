@@ -26,8 +26,11 @@ FORM_NAME = r"(?P<name>[A-Za-z_][A-Za-z0-9_-]*)"
 # Case-insensitive, multiline, dotall everywhere
 
 # FIX: allow hyphens in the FORM name and avoid \b (use lookahead for whitespace instead)
-FORM_BLOCK_RE   = re.compile(
-    rf"(?ims)^\s*FORM\s+{FORM_NAME}(?=\s)(?P<header>[\s\S]*?)\.\s*.*?^\s*ENDFORM\s*\.(?:[ \t]*\"[^\n]*)?\s*$"
+# FORM_BLOCK_RE   = re.compile(
+#     rf"(?ims)^\s*FORM\s+{FORM_NAME}(?=\s)(?P<header>[\s\S]*?)\.\s*.*?^\s*ENDFORM\s*\.(?:[ \t]*\"[^\n]*)?\s*$"
+# )
+FORM_BLOCK_RE = re.compile(
+    r"(?ims)^\s*FORM\s+([A-Za-z0-9_\-]+)\b(?P<header>[\s\S]*?)\.\s*.*?^\s*ENDFORM\s*\.(?:[ \t]*\"[^\n]*)?\s*$"
 )
 
 CLDEF_BLOCK_RE  = re.compile(
